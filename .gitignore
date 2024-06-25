@@ -58,3 +58,4 @@
 # Global settings. Exclude specific files
 sysinfo.txt
 crashlytics-build.properties
+UDP/UDP_DATA.json

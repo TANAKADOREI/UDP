@@ -59,6 +59,9 @@
 	"dotnet.defaultSolution": "UDP.sln",
 	"cSpell.words": [
 		"Behaviour",
+		"Lerp",
+		"Mathf",
+		"Resetable",
 		"TANAKADOREI"
 	]
 }
