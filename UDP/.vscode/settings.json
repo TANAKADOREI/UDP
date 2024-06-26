@@ -61,6 +61,7 @@
 		"Behaviour",
 		"Lerp",
 		"Mathf",
+		"Newtonsoft",
 		"Resetable",
 		"TANAKADOREI"
 	]

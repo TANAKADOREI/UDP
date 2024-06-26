@@ -59,3 +59,7 @@
 sysinfo.txt
 crashlytics-build.properties
 UDP/UDP_DATA.json
+UDP/UDP_HISTORY.line
+
+# ex
+!UDP.unitypackage

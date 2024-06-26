@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Security.Policy;
+using System.Text;
+using log4net.DateFormatter;
 using PlasticPipe.PlasticProtocol.Messages;
 using Unity.Plastic.Newtonsoft.Json;
 using Unity.Plastic.Newtonsoft.Json.Linq;
@@ -15,28 +17,23 @@ namespace TANAKADOREI.UnityEditor.UDP
 {
 	public class TANAKADOREI_UDP_ViewerWindow : EditorWindow
 	{
-		[MenuItem("TANAKADOREI/(UDP) Unity development progress : Viewer")]
+		[MenuItem("TANAKADOREI/(UDP) Unity development progress")]
 		public static void ShowWindow()
 		{
-			GetWindow<TANAKADOREI_UDP_ViewerWindow>("UDP Viewer");
+			GetWindow(typeof(TANAKADOREI_UDP_ViewerWindow), false, "UDP");
 		}
 
 		static void SetBackGroundColor(EditorWindow window, Color color)
 		{
-			SetBackGroundColor2(new Rect(0, 0, window.position.width, window.position.height),color);
-		}
-
-		static void SetBackGroundColor2(Rect rect, Color color)
-		{
 			var originalColor = GUI.backgroundColor;
 			GUI.backgroundColor = color;
-			GUI.Box(rect, GUIContent.none);
+			GUI.Box(new Rect(0, 0, window.position.width, window.position.height), GUIContent.none);
 			GUI.backgroundColor = originalColor;
 		}
 
-		static Rect RectAdd(in Rect rect, int add_value)
+		static Rect RectAdd(in Rect sample, int add_value)
 		{
-			var new_rect = new Rect(rect);
+			var new_rect = new Rect(sample.x, sample.y, sample.width, sample.height);
 			new_rect.xMax += add_value;
 			new_rect.xMin -= add_value;
 			new_rect.yMax += add_value;
@@ -46,9 +43,10 @@ namespace TANAKADOREI.UnityEditor.UDP
 
 		static void DrawProgress(Color theme, string title, string label, int frame_thickness, float t)
 		{
-			EditorGUILayout.LabelField($"{title}, [ {t * 100}% ] : [{label}]", EditorStyles.boldLabel);
+			EditorGUILayout.LabelField($"{title}, [ {(int)(t * 100)}% ] : [{label}]", EditorStyles.boldLabel);
 
 			frame_thickness = frame_thickness < 0 ? frame_thickness : -frame_thickness;
+
 			var time_progress_frame_rect = EditorGUILayout.GetControlRect(false, 24);
 			var time_progress_back_rect = RectAdd(time_progress_frame_rect, frame_thickness);
 			var time_progress__bar_rect = RectAdd(time_progress_back_rect, frame_thickness);
@@ -84,14 +82,87 @@ namespace TANAKADOREI.UnityEditor.UDP
 		Vector2 m_scroll_vec = Vector2.zero;
 		int m_select_index;
 		string m_label;
+		bool cache_checker_select_mode;
+		long m_last_on_gui_update_tick = DateTime.UtcNow.Ticks;
+		int[] m_edit_start_time = new int[7]
+		{
+			DateTime.Now.Year,
+			DateTime.Now.Month,
+			DateTime.Now.Day,
+			DateTime.Now.Hour,
+			DateTime.Now.Minute,
+			DateTime.Now.Second,
+			0,// not utc
+		};
+		int[] m_edit_end_time = new int[7]
+		{
+			DateTime.Now.Year,
+			DateTime.Now.Month,
+			DateTime.Now.Day,
+			DateTime.Now.Hour,
+			DateTime.Now.Minute,
+			DateTime.Now.Second,
+			0,// not utc
+		};
+		bool m_edit_time = false;
+
+		static void DrawSingleDateTime(int[] mem)
+		{
+			EditorGUILayout.LabelField("UTC", EditorStyles.boldLabel, GUILayout.Width(30));
+			mem[6] = EditorGUILayout.Toggle(mem[6] == 0 ? false : true, GUILayout.Width(10)) ? 1 : 0;
+
+			mem[0] = EditorGUILayout.IntField(mem[0], GUILayout.Width(40));
+			EditorGUILayout.LabelField("/", EditorStyles.boldLabel, GUILayout.Width(10));
+			mem[1] = EditorGUILayout.IntField(mem[1], GUILayout.Width(20));
+			EditorGUILayout.LabelField("/", EditorStyles.boldLabel, GUILayout.Width(10));
+			mem[2] = EditorGUILayout.IntField(mem[2], GUILayout.Width(20));
+			EditorGUILayout.LabelField("-", EditorStyles.boldLabel, GUILayout.Width(10));
+			mem[3] = EditorGUILayout.IntField(mem[3], GUILayout.Width(20));
+			EditorGUILayout.LabelField(":", EditorStyles.boldLabel, GUILayout.Width(10));
+			mem[4] = EditorGUILayout.IntField(mem[4], GUILayout.Width(20));
+			EditorGUILayout.LabelField(":", EditorStyles.boldLabel, GUILayout.Width(10));
+			mem[5] = EditorGUILayout.IntField(mem[5], GUILayout.Width(20));
+		}
+
+		static void DrawStartEndDateTime(int[] s_mem, int[] e_mem)
+		{
+			EditorGUILayout.BeginHorizontal();
+			DrawSingleDateTime(s_mem);
+			EditorGUILayout.LabelField("~", EditorStyles.boldLabel, GUILayout.Width(10));
+			DrawSingleDateTime(e_mem);
+			EditorGUILayout.EndHorizontal();
+		}
+
+		static bool TryApplyDateTime(in int[] start_mem, in int[] end_mem)
+		{
+			static DateTime ConvertIntArrToUTCDateTime(int[] mem)
+			{
+				var is_mem_utc_data = mem[6] == 0 ? DateTimeKind.Local : DateTimeKind.Utc;
+				var data = new DateTime(mem[0], mem[1], mem[2], mem[3], mem[4], mem[5], is_mem_utc_data);
+				if (is_mem_utc_data != DateTimeKind.Utc) data = data.ToUniversalTime();
+				return data;
+			}
+
+			var start = ConvertIntArrToUTCDateTime(start_mem);
+			var end = ConvertIntArrToUTCDateTime(end_mem);
+			var now = DateTime.UtcNow;
+
+			if (start < now && now < end)
+			{
+				RuntimeUDP_DATA.DATA.UTC_START = start.Ticks;
+				RuntimeUDP_DATA.DATA.UTC_END = end.Ticks;
+				return true;
+			}
+			else
+			{
+				Debug.LogError("Not applicable");
+				return false;
+			}
+		}
 
 		void OnGUI()
 		{
-			if (RuntimeUDP_DATA.DATA == null)
-			{
-				RuntimeUDP_DATA.Load_UDP_DATA();
-				return;
-			}
+			RuntimeUDP_DATA.Load_UDP_DATA();
 
 			m_start_date_time_string ??= new((k) => DateTimeToString(k), (k1, k2) => k1 == k2);
 			m_end_date_time_string ??= new((k) => DateTimeToString(k), (k1, k2) => k1 == k2);
@@ -99,17 +170,84 @@ namespace TANAKADOREI.UnityEditor.UDP
 			SetBackGroundColor(this, Color.black);
 			const int PROGRESS_FRAME_THICKNESS = -2;
 
-			var now_time = DateTime.UtcNow.Ticks;
+			var now_tick = DateTime.UtcNow.Ticks;
 
-			var t = (now_time - RuntimeUDP_DATA.DATA.UTC_START) / (RuntimeUDP_DATA.DATA.UTC_END - RuntimeUDP_DATA.DATA.UTC_START);
+			var progress_time__t = (float)((double)(now_tick - RuntimeUDP_DATA.DATA.UTC_START) / (double)(RuntimeUDP_DATA.DATA.UTC_END - RuntimeUDP_DATA.DATA.UTC_START));
+			var progress_me__t = RuntimeUDP_DATA.DATA.TODO_Progress_T;
 
-			double t2 = (double)RuntimeUDP_DATA.DATA.TODO_Count / (double)RuntimeUDP_DATA.DATA.AllocatedCount;
+			var progress_time__label = $"[{m_start_date_time_string.Get(RuntimeUDP_DATA.DATA.UTC_START)}] ~ [{m_start_date_time_string.Get(RuntimeUDP_DATA.DATA.UTC_END)}]";
+			var progress_me__label = $"TODO : ({RuntimeUDP_DATA.DATA.RemainTODO_Count}) {progress_me__t}%";
 
-			DrawProgress(Color.yellow, "Time", $"[{m_start_date_time_string.Get(RuntimeUDP_DATA.DATA.UTC_START)}] ~ [{m_start_date_time_string.Get(RuntimeUDP_DATA.DATA.UTC_END)}]", PROGRESS_FRAME_THICKNESS, t);
+			DrawProgress(Color.yellow, "Time", progress_time__label, PROGRESS_FRAME_THICKNESS, progress_time__t);
+			DrawProgress(Color.cyan, "Me", progress_me__label, PROGRESS_FRAME_THICKNESS, progress_me__t);
 
-			DrawProgress(Color.cyan, "Me", $"TODO : ({RuntimeUDP_DATA.DATA.TODO_Count}) {t2}%", PROGRESS_FRAME_THICKNESS, 1f - (float)t2);
+			var is_time_expiration = !(RuntimeUDP_DATA.DATA.UTC_START < now_tick && now_tick < RuntimeUDP_DATA.DATA.UTC_END);
 
-			RuntimeUDP_DATA.DATA.OnGUI(ref m_scroll_vec, ref m_label, ref m_select_index);
+			if(is_time_expiration)
+			{
+				EditorGUILayout.LabelField("The time has expired. Please set the time again.");
+			}
+
+			EditorGUI.BeginDisabledGroup(is_time_expiration);
+			RuntimeUDP_DATA.DATA.OnGUI(ref cache_checker_select_mode, ref m_scroll_vec, ref m_label, ref m_select_index);
+			EditorGUI.EndDisabledGroup();
+
+			// 일부러 모든 할일을 끝내놓고 시간대를 그나마 바꿀수있게 불편하게 맨아래에 뒀음
+			if (m_edit_time)
+			{
+				DrawStartEndDateTime(m_edit_start_time, m_edit_end_time);
+				EditorGUILayout.BeginHorizontal();
+				if (GUILayout.Button("TimeApply"))
+				{
+					if (TryApplyDateTime(m_edit_start_time, m_edit_end_time))
+					{
+						m_edit_time = false;
+					}
+				}
+				if (GUILayout.Button("CancelTimeSetting"))
+				{
+					m_edit_time = false;
+				}
+				EditorGUILayout.EndHorizontal();
+			}
+			else
+			{
+				if (GUILayout.Button("TimeSetting"))
+				{
+					m_edit_time = true;
+				}
+			}
+		}
+
+		void OnEnable()
+		{
+			EditorApplication.update += OnEditorUpdate;
+			OnFocus();
+		}
+
+		void OnFocus()
+		{
+			RuntimeUDP_DATA.Load_UDP_DATA(true);
+		}
+
+		void OnLostFocus()
+		{
+			RuntimeUDP_DATA.Save_UDP_DATA();
+		}
+
+		void OnDisable()
+		{
+			EditorApplication.update -= OnEditorUpdate;
+			OnLostFocus();
+		}
+
+		void OnEditorUpdate()
+		{
+			if (m_last_on_gui_update_tick != DateTime.UtcNow.Ticks)
+			{
+				m_last_on_gui_update_tick = DateTime.UtcNow.Ticks;
+				Repaint();
+			}
 		}
 	}
 
@@ -128,9 +266,10 @@ namespace TANAKADOREI.UnityEditor.UDP
 
 	public class TODO
 	{
+		public const string DEFAULT_CHECKER_NAME = nameof(TODO_Drawer.DefaultChecker);
 		public ulong ID = 0;
 		public string Label = "<NULL>";
-		public string CheckerName = "";
+		public string CheckerName = DEFAULT_CHECKER_NAME;
 
 		public delegate bool CheckerDelegate(TODO todo);
 
@@ -167,13 +306,12 @@ namespace TANAKADOREI.UnityEditor.UDP
 			}
 		}
 
-		public const string DEFAULT_CHECKER_NAME = nameof(DefaultChecker);
 
 		public static void RefreshCheckers()
 		{
 			g_dict_checkers = new()
 		{
-			{ DEFAULT_CHECKER_NAME, DefaultChecker }
+			{ TODO.DEFAULT_CHECKER_NAME, DefaultChecker }
 		};
 
 			foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
@@ -205,12 +343,6 @@ namespace TANAKADOREI.UnityEditor.UDP
 		/// <returns>updated</returns>
 		public static void OnGUI_TODO_Tasks(UDP_DATA udp_data, TODO todo)
 		{
-			if (GUILayout.Button("-"))
-			{
-				udp_data.RemoveTODO(todo.ID);
-				return;
-			}
-
 			if (GUILayout.Button("✔"))
 			{
 				TODO.CheckerDelegate checker = null;
@@ -219,11 +351,11 @@ namespace TANAKADOREI.UnityEditor.UDP
 				{
 					try
 					{
-						checker = g_dict_checkers[DEFAULT_CHECKER_NAME];
+						checker = g_dict_checkers[TODO.DEFAULT_CHECKER_NAME];
 					}
 					catch
 					{
-						Debug.LogError($"There is no checker '{DEFAULT_CHECKER_NAME}'. Try refreshing.");
+						Debug.LogError($"There is no checker '{TODO.DEFAULT_CHECKER_NAME}'. Try refreshing.");
 					}
 				}
 				else
@@ -248,9 +380,22 @@ namespace TANAKADOREI.UnityEditor.UDP
 			}
 		}
 
-		private static bool DefaultChecker(TODO todo)
+		public static bool DefaultChecker(TODO todo)
 		{
 			return true;
+		}
+	}
+
+	public static class UDP_Recorder
+	{
+		static string UDP_DATA_FILE_PATH => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "UDP_HISTORY.line"));
+		const char SEP_CHAR = '/';
+		/// <summary>
+		/// 완료한 TODO 기록
+		/// </summary>
+		public static void WriteLine(string msg)
+		{
+			File.AppendAllText(UDP_DATA_FILE_PATH,SEP_CHAR+msg,Encoding.UTF8);
 		}
 	}
 
@@ -259,29 +404,33 @@ namespace TANAKADOREI.UnityEditor.UDP
 	/// </summary>
 	public class UDP_DATA
 	{
+		[JsonProperty(nameof(UTC_START))]
 		public long UTC_START = DateTime.MinValue.Ticks;
+		[JsonProperty(nameof(UTC_END))]
 		public long UTC_END = DateTime.MaxValue.Ticks;
+		[JsonProperty("ID_COUNTER")]
 		ulong m_id_counter = 0;
+		[JsonProperty("TODO_LIST")]
 		Dictionary<ulong, TODO> m_todo_list = new();
 
 		[JsonIgnore]
 		bool m_todo_list_updated = false;
 		[JsonIgnore]
-		public ulong TODO_Count => (ulong)m_todo_list.Count;
-		public ulong AllocatedCount => m_id_counter;
+		public ulong RemainTODO_Count => (ulong)m_todo_list.Count;
+		[JsonProperty("MEM001")]
+		public ulong TODO_AddCapacity = 0;
+		[JsonIgnore]
+		public ulong TotalTODO_Count => m_id_counter;
+		[JsonIgnore]
+		public float TODO_Progress_T=>TODO_AddCapacity == 0 ? 1 : (1f - (float)((double)RemainTODO_Count / (double)TODO_AddCapacity));
 
 		public ulong NewTODO(string label)
 		{
 			var id = ++m_id_counter;
 			m_todo_list.Add(id, new(id, label));
 			m_todo_list_updated = true;
+			TODO_AddCapacity = RemainTODO_Count;
 			return id;
-		}
-
-		public void RemoveTODO(ulong id)
-		{
-			m_todo_list.Remove(id);
-			m_todo_list_updated = true;
 		}
 
 		public void CompleteTODO(TODO todo)
@@ -290,24 +439,37 @@ namespace TANAKADOREI.UnityEditor.UDP
 			{
 				Debug.LogError("This is a TODO that has already been removed or does not exist.");
 			}
-			m_todo_list_updated = true;
+			else
+			{
+				if (m_todo_list.Count == 0)
+				{
+					TODO_AddCapacity = 0;
+				}
+				m_todo_list_updated = true;
+
+				UDP_Recorder.WriteLine($"{UTC_START};{UTC_END};{DateTime.UtcNow.Ticks};{RemainTODO_Count};{TODO_AddCapacity};{TODO_Progress_T};{todo.ID};{todo.Label};{todo.CheckerName}");
+			}
 		}
 
-		public void OnGUI(ref Vector2 scroll_vec, ref string cache_todo_label, ref int cache_select_index)
+		public void OnGUI(ref bool cache_checker_select_mode, ref Vector2 scroll_vec, ref string cache_todo_label, ref int cache_select_index)
 		{
 			EditorGUILayout.BeginHorizontal();
 			{
-				cache_todo_label = EditorGUILayout.TextField("TODO:", cache_todo_label);
+				EditorGUILayout.LabelField("TODO");
+				cache_todo_label = EditorGUILayout.TextField(cache_todo_label);
 				if (GUILayout.Button("New TODO"))
 				{
 					var id = NewTODO(cache_todo_label).ToString();
+					cache_todo_label = "";
 					GUIUtility.systemCopyBuffer = id;
 					Debug.Log($"TODO ID Copied. `{id}`");
 				}
+
+				cache_checker_select_mode = GUILayout.Toggle(cache_checker_select_mode, "SelectChecker");
 			}
 			EditorGUILayout.EndHorizontal();
 
-			scroll_vec = EditorGUILayout.BeginScrollView(scroll_vec, GUILayout.MinHeight(24));
+			scroll_vec = EditorGUILayout.BeginScrollView(scroll_vec);
 			using (var iter = m_todo_list.GetEnumerator())
 			{
 				while (iter.MoveNext())
@@ -321,6 +483,7 @@ namespace TANAKADOREI.UnityEditor.UDP
 							m_todo_list_updated = true;
 							todo.Label = temp;
 						}
+						if (cache_checker_select_mode)
 						{
 							cache_select_index = EditorGUILayout.Popup(cache_select_index, TODO_Drawer.CheckerNames);
 							var selected_checker_name = TODO_Drawer.CheckerNames[cache_select_index];
@@ -328,7 +491,17 @@ namespace TANAKADOREI.UnityEditor.UDP
 							{
 								m_todo_list_updated = true;
 								todo.CheckerName = selected_checker_name;
+								cache_checker_select_mode = false;
 							}
+							cache_select_index = 0;
+						}
+						else
+						{
+							if (todo.CheckerName?.Length <= 0)
+							{
+								todo.CheckerName = TODO.DEFAULT_CHECKER_NAME;
+							}
+							todo.CheckerName = EditorGUILayout.TextField(todo.CheckerName);
 						}
 
 						TODO_Drawer.OnGUI_TODO_Tasks(this, todo);
@@ -357,24 +530,25 @@ namespace TANAKADOREI.UnityEditor.UDP
 
 		public static UDP_DATA DATA => m_udp_data;
 
-		public static void Load_UDP_DATA()
+		public static void Load_UDP_DATA(bool force = false)
 		{
+			if (!force && m_udp_data != null) return;
+			TODO_Drawer.RefreshCheckers();
 			try
 			{
-				TODO_Drawer.RefreshCheckers();
 				m_udp_data = JsonConvert.DeserializeObject<UDP_DATA>(File.ReadAllText(UDP_DATA_FILE_PATH));
 			}
 			catch
 			{
+				m_udp_data = new UDP_DATA();
 			}
-			m_udp_data ??= new UDP_DATA();
 		}
 
 		public static void Save_UDP_DATA()
 		{
 			try
 			{
-				File.WriteAllText(UDP_DATA_FILE_PATH, JsonConvert.SerializeObject(m_udp_data));
+				File.WriteAllText(UDP_DATA_FILE_PATH, JsonConvert.SerializeObject(m_udp_data, Formatting.Indented));
 			}
 			catch (Exception ex)
 			{
